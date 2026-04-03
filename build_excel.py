@@ -6,12 +6,11 @@
 # USAGE:
 #   1. Set GITHUB_TOKEN below to your fine-grained PAT (read scope: pjblouin/residata)
 #   2. Run: python build_excel.py
-#   3. Find output: REIT_Rental_Analysis_{date}.xlsx in your OneDrive folder
-#      → accessible from GS remote machine via OneDrive (no install needed)
+#   3. Find output: REIT_Rental_Analysis_{date}.xlsx in same folder as this script
 #
 # WEEKLY WORKFLOW:
 #   - Scraper runs on main machine → pushes new dated CSVs to GitHub
-#   - Run this script on main machine → Excel saves to OneDrive, auto-syncs to remote
+#   - Copy this script to any machine with Python → run to get latest Excel
 #   - Same-property WoW analysis activates automatically from Week 2 onwards
 
 import os
@@ -46,7 +45,7 @@ GITHUB_REPO   = "residata"
 GITHUB_TOKEN  = ""
 DATA_PATH     = "data/raw"          # folder in repo where CSVs live
 REGISTRY_PATH = "data/registry/unit_registry.csv"
-OUTPUT_DIR    = r"C:\Users\pblou\OneDrive\Documents\AI@GSB"  # syncs to OneDrive automatically
+OUTPUT_DIR    = "."  # saves Excel in same folder as this script; change to any local path
 CACHE_DIR     = "./residata_cache"  # local cache to avoid re-downloading unchanged files
 
 # ─────────────────────────────────────────────────────────────────────────────
