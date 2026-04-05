@@ -73,9 +73,11 @@ def _load_scrapers() -> dict:
         scrapers["INVH"] = scrape_invh
     except ImportError as e:
         logger.warning(f"Could not load INVH scraper: {e}")
-    # AMH (American Homes 4 Rent): BTR community REIT — does NOT publish
-    # individual home rents publicly.  api.ah4rc.com/mapjson/ returns only
-    # visual floor-plan map data (no prices).  AMH is not scrapeable.
+    try:
+        from scrapers.amh import scrape_amh
+        scrapers["AMH"] = scrape_amh
+    except ImportError as e:
+        logger.warning(f"Could not load AMH scraper: {e}")
     return scrapers
 
 
