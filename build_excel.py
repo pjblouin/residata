@@ -1130,7 +1130,12 @@ def build_data_sheet(wb, df):
     ws = wb.create_sheet("Data")
     ws.sheet_view.showGridLines = False
 
-    display_cols = [c for c in EXPECTED_COLS + ["macro_market"] if c in df.columns]
+    # Add same_prop flag: TRUE if unit_id appears in more than one scrape_date
+    unit_date_counts = df.groupby("unit_id")["scrape_date"].nunique()
+    multi_date_units = set(unit_date_counts[unit_date_counts > 1].index)
+    df["same_prop"] = df["unit_id"].isin(multi_date_units)
+
+    display_cols = [c for c in EXPECTED_COLS + ["macro_market", "same_prop"] if c in df.columns]
     write_header_row(ws, 1, display_cols)
 
     fmts = []
@@ -1437,6 +1442,16 @@ def build_charts_concessions_sheet(wb, df):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_same_prop_sheet(wb, df, sp_df):
+    """
+    Build Same_Prop_Trends using EXCEL FORMULAS referencing the Data sheet.
+
+    Data sheet layout (row 1 = header, data starts row 2):
+      Col A = scrape_date, Col B = reit, Col C = macro_market, Col D = market,
+      Col E = community, Col F = unit_id, Col G = beds, Col H = sqft, Col I = rent,
+      ... last col = same_prop (TRUE/FALSE)
+
+    We need to find the actual column letters dynamically.
+    """
     ws = wb.create_sheet("Same_Prop_Trends")
     ws.sheet_view.showGridLines = False
 
@@ -1449,12 +1464,43 @@ def build_same_prop_sheet(wb, df, sp_df):
             name="Arial", italic=True, color="888888", size=10)
         return ws
 
+    # ── Discover Data sheet column layout ──
+    data_ws = wb["Data"]
+    data_col_map = {}
+    for col_idx in range(1, data_ws.max_column + 1):
+        val = data_ws.cell(row=1, column=col_idx).value
+        if val:
+            data_col_map[val.lower().strip()] = get_column_letter(col_idx)
+
+    date_col  = data_col_map.get("scrape_date", "A")
+    reit_col  = data_col_map.get("reit", "B")
+    rent_col  = data_col_map.get("rent", "I")
+    beds_col  = data_col_map.get("beds", "G")
+    sp_col    = data_col_map.get("same_prop", "R")
+    conc_col  = data_col_map.get("has_concession", "J")
+    macro_col = data_col_map.get("macro_market", "P")
+
+    data_max_row = data_ws.max_row
+    # Range strings for AVERAGEIFS / COUNTIFS
+    DATE_RNG  = f"Data!${date_col}$2:${date_col}${data_max_row}"
+    REIT_RNG  = f"Data!${reit_col}$2:${reit_col}${data_max_row}"
+    RENT_RNG  = f"Data!${rent_col}$2:${rent_col}${data_max_row}"
+    BEDS_RNG  = f"Data!${beds_col}$2:${beds_col}${data_max_row}"
+    SP_RNG    = f"Data!${sp_col}$2:${sp_col}${data_max_row}"
+    CONC_RNG  = f"Data!${conc_col}$2:${conc_col}${data_max_row}"
+    MACRO_RNG = f"Data!${macro_col}$2:${macro_col}${data_max_row}"
+
+    date_strs = [d.strftime("%Y-%m-%d") for d in dates]
+    prev_date_str = date_strs[0]
+    curr_date_str = date_strs[-1]
+
     add_title(ws, "Same-Property WoW Rent Change — REIT × Macro Market × Beds", row=1)
+    ws.cell(row=2, column=1,
+            value=f"Same-prop = unit present in both {prev_date_str} and {curr_date_str}  |  "
+                  f"All formulas reference Data sheet (same_prop=TRUE filter)").font = Font(
+        name="Arial", italic=True, size=9, color="666666")
 
-    # Latest period only for the table
-    latest_curr = sp_df["date_curr"].max()
-    sp_latest = sp_df[sp_df["date_curr"] == latest_curr].copy()
-
+    # ── Build the detail table with formulas ──
     headers = ["REIT", "Macro Market", "Beds", "Same-Prop Count",
                "Avg Rent (Curr)", "Avg Rent (Prev)", "WoW Chg (%)",
                "Concession Rate (Curr)", "Concession Rate (Prev)",
@@ -1464,10 +1510,9 @@ def build_same_prop_sheet(wb, df, sp_df):
     green_fill = PatternFill("solid", fgColor=LT_GREEN)
     red_fill   = PatternFill("solid", fgColor=LT_RED)
 
-    fmts = [None, None, None, NUM_COMMA,
-            NUM_CURRENCY, NUM_CURRENCY, NUM_PCT,
-            NUM_PCT, NUM_PCT, None]
-
+    # Get unique combos from sp_df for row labels
+    latest_curr = sp_df["date_curr"].max()
+    sp_latest = sp_df[sp_df["date_curr"] == latest_curr].copy()
     data_rows = sorted(
         sp_latest.itertuples(index=False),
         key=lambda r: (str(r.reit), str(r.macro_market), r.beds if pd.notna(r.beds) else 99)
@@ -1476,88 +1521,175 @@ def build_same_prop_sheet(wb, df, sp_df):
     for i, row in enumerate(data_rows):
         excel_row = 4 + i
         alt = (i % 2 == 1)
-        beds_disp = int(row.beds) if pd.notna(row.beds) else "N/A"
-        period_str = f"{str(row.date_prev)[:10]} -> {str(row.date_curr)[:10]}"
-        vals = [
-            row.reit,
-            row.macro_market,
-            beds_disp,
-            int(row.sp_count) if pd.notna(row.sp_count) else None,
-            round(row.sp_avg_rent_curr, 0) if pd.notna(row.sp_avg_rent_curr) else None,
-            round(row.sp_avg_rent_prev, 0) if pd.notna(row.sp_avg_rent_prev) else None,
-            round(row.sp_wow_pct, 4) if pd.notna(row.sp_wow_pct) else None,
-            round(row.sp_concession_rate_curr, 4) if pd.notna(row.sp_concession_rate_curr) else None,
-            round(row.sp_concession_rate_prev, 4) if pd.notna(row.sp_concession_rate_prev) else None,
-            period_str,
-        ]
-        write_data_row(ws, excel_row, vals, alt=alt, number_formats=fmts)
+        alt_fill = PatternFill("solid", fgColor=ALT_ROW) if alt else None
 
-        # Highlight WoW column (col 7)
-        wow_val = row.sp_wow_pct
-        if pd.notna(wow_val):
-            cell = ws.cell(row=excel_row, column=7)
-            if wow_val > 0.005:
-                cell.fill = green_fill
-            elif wow_val < -0.005:
-                cell.fill = red_fill
+        reit_val = row.reit
+        macro_val = row.macro_market
+        beds_val = int(row.beds) if pd.notna(row.beds) else 0
+
+        # Col A: REIT (hardcoded label)
+        c = ws.cell(row=excel_row, column=1, value=reit_val)
+        c.font = BODY_FONT
+        if alt_fill: c.fill = alt_fill
+
+        # Col B: Macro Market
+        c = ws.cell(row=excel_row, column=2, value=macro_val)
+        c.font = BODY_FONT
+        if alt_fill: c.fill = alt_fill
+
+        # Col C: Beds
+        c = ws.cell(row=excel_row, column=3, value=beds_val)
+        c.font = BODY_FONT
+        if alt_fill: c.fill = alt_fill
+
+        # Common criteria for AVERAGEIFS/COUNTIFS
+        # Match: same_prop=TRUE, reit=A{row}, macro_market=B{row}, beds=C{row}
+        base_criteria = (
+            f'{SP_RNG},TRUE,'
+            f'{REIT_RNG},A{excel_row},'
+            f'{MACRO_RNG},B{excel_row},'
+            f'{BEDS_RNG},C{excel_row}'
+        )
+
+        # Col D: Same-Prop Count (current date)
+        formula_count = f'=COUNTIFS({DATE_RNG},"{curr_date_str}",{base_criteria})'
+        c = ws.cell(row=excel_row, column=4, value=formula_count)
+        c.font = Font(name="Arial", size=10, color="000000")
+        c.number_format = NUM_COMMA
+        if alt_fill: c.fill = alt_fill
+
+        # Col E: Avg Rent (Curr)
+        formula_rent_curr = f'=AVERAGEIFS({RENT_RNG},{DATE_RNG},"{curr_date_str}",{base_criteria})'
+        c = ws.cell(row=excel_row, column=5, value=formula_rent_curr)
+        c.font = Font(name="Arial", size=10, color="000000")
+        c.number_format = NUM_CURRENCY
+        if alt_fill: c.fill = alt_fill
+
+        # Col F: Avg Rent (Prev)
+        formula_rent_prev = f'=AVERAGEIFS({RENT_RNG},{DATE_RNG},"{prev_date_str}",{base_criteria})'
+        c = ws.cell(row=excel_row, column=6, value=formula_rent_prev)
+        c.font = Font(name="Arial", size=10, color="000000")
+        c.number_format = NUM_CURRENCY
+        if alt_fill: c.fill = alt_fill
+
+        # Col G: WoW Chg (%) = (Curr - Prev) / Prev
+        formula_wow = f'=IF(F{excel_row}=0,"",E{excel_row}/F{excel_row}-1)'
+        c = ws.cell(row=excel_row, column=7, value=formula_wow)
+        c.font = Font(name="Arial", size=10, color="000000")
+        c.number_format = NUM_PCT
+        if alt_fill: c.fill = alt_fill
+
+        # Col H: Concession Rate (Curr) = COUNTIFS(conc=TRUE,...) / COUNTIFS(...)
+        formula_conc_curr = (
+            f'=IFERROR(COUNTIFS({DATE_RNG},"{curr_date_str}",{base_criteria},'
+            f'{CONC_RNG},TRUE)'
+            f'/COUNTIFS({DATE_RNG},"{curr_date_str}",{base_criteria}),"")'
+        )
+        c = ws.cell(row=excel_row, column=8, value=formula_conc_curr)
+        c.font = Font(name="Arial", size=10, color="000000")
+        c.number_format = NUM_PCT
+        if alt_fill: c.fill = alt_fill
+
+        # Col I: Concession Rate (Prev)
+        formula_conc_prev = (
+            f'=IFERROR(COUNTIFS({DATE_RNG},"{prev_date_str}",{base_criteria},'
+            f'{CONC_RNG},TRUE)'
+            f'/COUNTIFS({DATE_RNG},"{prev_date_str}",{base_criteria}),"")'
+        )
+        c = ws.cell(row=excel_row, column=9, value=formula_conc_prev)
+        c.font = Font(name="Arial", size=10, color="000000")
+        c.number_format = NUM_PCT
+        if alt_fill: c.fill = alt_fill
+
+        # Col J: Period
+        period_str = f"{prev_date_str} -> {curr_date_str}"
+        c = ws.cell(row=excel_row, column=10, value=period_str)
+        c.font = BODY_FONT
+        if alt_fill: c.fill = alt_fill
 
     n_data = len(data_rows)
 
-    # ── Line chart: rent index (base=100) per REIT over time ──
-    # Build index table below the main table
+    # ── Rent Index Table (formulas) ──
     chart_start_row = 4 + n_data + 3
     ws.cell(row=chart_start_row - 1, column=1,
             value="Same-Property Avg Rent Index (Base=100, per REIT)").font = SUBHEAD_FONT
+    ws.cell(row=chart_start_row - 1, column=4,
+            value="Formula: AVERAGEIFS on Data sheet, same_prop=TRUE, then indexed to Week 1 = 100").font = Font(
+        name="Arial", italic=True, size=9, color="666666")
 
     reits = sorted(sp_df["reit"].dropna().unique())
 
-    # For each REIT, compute avg rent per date across all markets/beds
-    reit_date_rent = (
-        sp_df.groupby(["reit", "date_curr"])["sp_avg_rent_curr"]
-        .mean()
-        .reset_index()
-    )
-
-    # Pivot: rows = dates, cols = reits
-    all_dates_for_chart = sorted(set(
-        list(sp_df["date_curr"].unique()) + [sp_df["date_prev"].min()]
-    ))
-
-    # Build a wider series: include the very first prev date
-    first_prev = sp_df["date_prev"].min()
-    reit_date_rent_base = (
-        sp_df[sp_df["date_prev"] == first_prev]
-        .groupby("reit")["sp_avg_rent_prev"]
-        .mean()
-        .reset_index()
-        .rename(columns={"sp_avg_rent_prev": "sp_avg_rent_curr"})
-    )
-    reit_date_rent_base["date_curr"] = first_prev
-    combined_rent = pd.concat([reit_date_rent_base, reit_date_rent], ignore_index=True)
-    combined_rent = combined_rent.sort_values("date_curr")
-
-    pivot_chart = combined_rent.pivot(index="date_curr", columns="reit", values="sp_avg_rent_curr")
-
-    # Normalise to base 100
-    for reit in pivot_chart.columns:
-        first_val = pivot_chart[reit].dropna().iloc[0] if not pivot_chart[reit].dropna().empty else None
-        if first_val and first_val != 0:
-            pivot_chart[reit] = (pivot_chart[reit] / first_val * 100).round(2)
-
-    chart_hdr = ["Date"] + list(pivot_chart.columns)
+    # Header row
+    chart_hdr = ["Date"] + reits
     write_header_row(ws, chart_start_row, chart_hdr)
 
-    chart_dates = [str(d)[:10] for d in pivot_chart.index]
-    for i, (dt, row_series) in enumerate(pivot_chart.iterrows()):
-        row_vals = [str(dt)[:10]] + [
-            float(row_series[r]) if pd.notna(row_series.get(r, float("nan"))) else None
-            for r in pivot_chart.columns
-        ]
-        write_data_row(ws, chart_start_row + 1 + i, row_vals, alt=(i % 2 == 1))
+    # Row for each date
+    for d_idx, date_val in enumerate(dates):
+        r = chart_start_row + 1 + d_idx
+        date_str = date_val.strftime("%Y-%m-%d")
+        ws.cell(row=r, column=1, value=date_str).font = BODY_FONT
 
-    n_chart_rows = len(pivot_chart)
+        for reit_idx, reit in enumerate(reits):
+            col = 2 + reit_idx
+            # AVERAGEIFS: avg rent for this REIT on this date, same_prop=TRUE
+            avg_formula = (
+                f'=AVERAGEIFS({RENT_RNG},'
+                f'{DATE_RNG},"{date_str}",'
+                f'{SP_RNG},TRUE,'
+                f'{REIT_RNG},"{reit}")'
+            )
 
-    if n_chart_rows >= 2 and reits:
+            if d_idx == 0:
+                # Base period: just the average rent (we'll index off this)
+                # Write avg rent, then the index row will reference it
+                ws.cell(row=r, column=col, value=avg_formula)
+                ws.cell(row=r, column=col).number_format = NUM_CURRENCY
+            else:
+                # Index formula: (this period avg / base period avg) * 100
+                base_cell = f"{get_column_letter(col)}{chart_start_row + 1}"
+                ws.cell(row=r, column=col,
+                        value=f'=IFERROR({avg_formula}/{base_cell}*100,"")')
+                ws.cell(row=r, column=col).number_format = '0.00'
+
+            ws.cell(row=r, column=col).font = Font(name="Arial", size=10, color="000000")
+
+    # For the base row, overwrite with =100 (index base)
+    # Actually let's add a separate index table below for the chart
+    # The raw avg rent table is useful too — keep it, add index table below
+
+    n_date_rows = len(dates)
+
+    # ── Index table for charting ──
+    idx_start = chart_start_row + n_date_rows + 2
+    ws.cell(row=idx_start - 1, column=1,
+            value="Rent Index (Base = 100)").font = SUBHEAD_FONT
+
+    idx_hdr = ["Date"] + reits
+    write_header_row(ws, idx_start, idx_hdr)
+
+    for d_idx, date_val in enumerate(dates):
+        r = idx_start + 1 + d_idx
+        date_str = date_val.strftime("%Y-%m-%d")
+        ws.cell(row=r, column=1, value=date_str).font = BODY_FONT
+
+        for reit_idx, reit in enumerate(reits):
+            col = 2 + reit_idx
+            col_letter = get_column_letter(col)
+            # Reference the avg rent table above
+            curr_rent_cell = f"{col_letter}{chart_start_row + 1 + d_idx}"
+            base_rent_cell = f"{col_letter}{chart_start_row + 1}"  # first date row
+
+            if d_idx == 0:
+                ws.cell(row=r, column=col, value=100)
+            else:
+                ws.cell(row=r, column=col,
+                        value=f'=IFERROR({curr_rent_cell}/{base_rent_cell}*100,"")')
+
+            ws.cell(row=r, column=col).number_format = '0.00'
+            ws.cell(row=r, column=col).font = Font(name="Arial", size=10, color="000000")
+
+    # ── Line chart from index table ──
+    if n_date_rows >= 2 and reits:
         line_chart = LineChart()
         line_chart.title    = "Same-Property Avg Rent Index (Base = 100)"
         line_chart.y_axis.title = "Rent Index"
@@ -1569,17 +1701,17 @@ def build_same_prop_sheet(wb, df, sp_df):
         data_ref = Reference(
             ws,
             min_col=2, max_col=1 + len(reits),
-            min_row=chart_start_row,
-            max_row=chart_start_row + n_chart_rows,
+            min_row=idx_start,
+            max_row=idx_start + n_date_rows,
         )
         cats_ref = Reference(
             ws, min_col=1,
-            min_row=chart_start_row + 1,
-            max_row=chart_start_row + n_chart_rows,
+            min_row=idx_start + 1,
+            max_row=idx_start + n_date_rows,
         )
         line_chart.add_data(data_ref, titles_from_data=True)
         line_chart.set_categories(cats_ref)
-        ws.add_chart(line_chart, f"A{chart_start_row + n_chart_rows + 2}")
+        ws.add_chart(line_chart, f"A{idx_start + n_date_rows + 2}")
 
     freeze_top_row(ws)
     set_col_widths(ws, {
