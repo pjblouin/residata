@@ -125,7 +125,7 @@ def git_push():
             logger.info(f"  stderr: {result.stderr.strip()[:200]}")
         return result
 
-    git("add", "data/raw/", "data/registry/")
+    git("add", "data/raw/", "data/registry/", "data/summary/")
 
     status = git("status", "--porcelain")
     if not status.stdout.strip():

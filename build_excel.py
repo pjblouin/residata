@@ -18,9 +18,11 @@ import io
 import json
 import re
 import sys
+from datetime import datetime, timedelta
 import requests
 import pandas as pd
 from collections import defaultdict
+from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import (
     Font, PatternFill, Alignment, Border, Side, numbers
@@ -46,8 +48,10 @@ GITHUB_REPO   = "residata"
 GITHUB_TOKEN  = ""
 DATA_PATH     = "data/raw"          # folder in repo where CSVs live
 REGISTRY_PATH = "data/registry/unit_registry.csv"
+SUMMARY_PATH  = "data/summary/summary_history.csv"  # persistent summary in repo
 OUTPUT_DIR    = "."  # saves Excel in same folder as this script; change to any local path
 CACHE_DIR     = "./residata_cache"  # local cache to avoid re-downloading unchanged files
+LOCAL_SUMMARY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "summary")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MACRO MARKET MAP
@@ -613,6 +617,26 @@ NUM_COMMA     = '#,##0'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# FILENAME PARSING (must be before download functions that use it)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Patterns: {ticker}_raw_{YYYY-MM-DD}.csv
+#           {ticker}_raw_{YYYY-MM-DD}_part1.csv / _part2.csv
+FNAME_RE = re.compile(r'^(.+?)_raw_(\d{4}-\d{2}-\d{2})(?:_part(\d+))?\.csv$', re.IGNORECASE)
+
+
+def parse_filename(fname):
+    """Returns (ticker, scrape_date, part_num_or_None)."""
+    m = FNAME_RE.match(fname)
+    if not m:
+        return None, None, None
+    ticker     = m.group(1).upper()
+    date_str   = m.group(2)
+    part_num   = int(m.group(3)) if m.group(3) else None
+    return ticker, date_str, part_num
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # STEP 1 & 2: GITHUB DOWNLOAD + LOCAL CACHE
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -660,11 +684,28 @@ def download_file(download_url):
     return resp.content
 
 
-def fetch_all_csvs():
+def _snap_to_saturday(dt):
+    """Snap a date to the Saturday of that week (Saturday=5 in weekday())."""
+    offset = (dt.weekday() - 5) % 7  # 0 if already Saturday
+    return dt - timedelta(days=offset)
+
+
+def _parse_date_from_filename(fname):
+    """Extract date string from a CSV filename, return as datetime.date or None."""
+    m = FNAME_RE.match(fname)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(2), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def fetch_latest_2_weeks_csvs():
     """
-    Download all CSVs from DATA_PATH on GitHub, using cache to skip unchanged files.
-    Returns list of (filename, bytes_content) tuples for individual CSV files
-    (before part merging).
+    List all CSVs in DATA_PATH on GitHub, parse dates from filenames,
+    identify the 2 most recent Saturday-normalized periods, and only
+    download CSVs from those 2 periods. Returns list of (filename, bytes_content).
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
     manifest = _load_manifest()
@@ -672,25 +713,50 @@ def fetch_all_csvs():
     print(f"\n[Step 1] Listing files in GitHub repo: {GITHUB_OWNER}/{GITHUB_REPO}/{DATA_PATH}")
     all_items = list_github_files(DATA_PATH)
     csv_items = [f for f in all_items if isinstance(f, dict) and f.get("name", "").endswith(".csv")]
-    print(f"  Found {len(csv_items)} CSV file(s)")
+    print(f"  Found {len(csv_items)} CSV file(s) total in repo")
+
+    # Parse dates and snap to Saturday
+    file_periods = {}  # fname -> saturday date
+    for item in csv_items:
+        fname = item["name"]
+        raw_date = _parse_date_from_filename(fname)
+        if raw_date is None:
+            continue
+        sat_date = _snap_to_saturday(raw_date)
+        file_periods[fname] = sat_date
+
+    # Find the 2 most recent Saturday periods
+    unique_periods = sorted(set(file_periods.values()), reverse=True)
+    if not unique_periods:
+        print("  [ERROR] No dated CSV files found.")
+        return []
+
+    target_periods = set(unique_periods[:2])
+    period_labels = ", ".join(str(p) for p in sorted(target_periods))
+    print(f"  Target periods (latest 2 Saturdays): {period_labels}")
+
+    # Filter to only files in those periods
+    target_items = [
+        item for item in csv_items
+        if item["name"] in file_periods and file_periods[item["name"]] in target_periods
+    ]
+    print(f"  Downloading {len(target_items)} CSV file(s) from target periods")
 
     results = []
     downloaded = 0
     cached_hits = 0
 
-    for item in csv_items:
+    for item in target_items:
         fname = item["name"]
         sha   = item.get("sha", "")
         durl  = item.get("download_url", "")
         cache_file = _cached_path(fname)
 
         if manifest.get(fname) == sha and os.path.exists(cache_file):
-            # Cache hit — read from disk
             with open(cache_file, "rb") as fh:
                 content = fh.read()
             cached_hits += 1
         else:
-            # Download fresh copy
             print(f"  Downloading: {fname}")
             content = download_file(durl)
             with open(cache_file, "wb") as fh:
@@ -744,24 +810,37 @@ def fetch_registry():
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FILENAME PARSING
-# ─────────────────────────────────────────────────────────────────────────────
+def fetch_summary_history():
+    """
+    Download summary_history.csv from GitHub (if it exists).
+    Returns a DataFrame or None if not found.
+    """
+    print(f"\n[Step 1c] Fetching summary history from GitHub...")
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{SUMMARY_PATH}"
+        resp = requests.get(url, headers=_api_headers(), timeout=30)
+        if resp.status_code == 404:
+            print(f"  [INFO] summary_history.csv not found yet (first run). Will create.")
+            return None
+        resp.raise_for_status()
+        item = resp.json()
+        durl = item.get("download_url", "")
+        content = download_file(durl)
+        df = pd.read_csv(io.BytesIO(content))
+        print(f"  Loaded summary_history.csv: {len(df):,} existing rows")
+        return df
+    except Exception as e:
+        print(f"  [WARNING] Could not fetch summary_history.csv: {e}")
+        return None
 
-# Patterns: {ticker}_raw_{YYYY-MM-DD}.csv
-#           {ticker}_raw_{YYYY-MM-DD}_part1.csv / _part2.csv
-FNAME_RE      = re.compile(r'^(.+?)_raw_(\d{4}-\d{2}-\d{2})(?:_part(\d+))?\.csv$', re.IGNORECASE)
 
-
-def parse_filename(fname):
-    """Returns (ticker, scrape_date, part_num_or_None)."""
-    m = FNAME_RE.match(fname)
-    if not m:
-        return None, None, None
-    ticker     = m.group(1).upper()
-    date_str   = m.group(2)
-    part_num   = int(m.group(3)) if m.group(3) else None
-    return ticker, date_str, part_num
+def save_summary_history(summary_df):
+    """Save summary_history.csv locally for git push by weekly_run.py."""
+    os.makedirs(LOCAL_SUMMARY_DIR, exist_ok=True)
+    out_path = os.path.join(LOCAL_SUMMARY_DIR, "summary_history.csv")
+    summary_df.to_csv(out_path, index=False)
+    print(f"  Saved summary_history.csv: {len(summary_df):,} rows -> {out_path}")
+    return out_path
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1048,6 +1127,92 @@ def compute_same_property(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# STEP 5b: SUMMARY HISTORY — persistent accumulator
+# ─────────────────────────────────────────────────────────────────────────────
+
+SUMMARY_COLS = [
+    "scrape_date", "reit", "macro_market", "beds",
+    "listing_count", "avg_rent", "median_rent", "avg_sqft",
+    "rent_per_sqft", "concession_rate", "avg_concession_value",
+    "sp_count", "sp_avg_rent_curr", "sp_avg_rent_prev",
+    "sp_wow_pct", "sp_concession_rate_curr", "sp_concession_rate_prev",
+]
+
+
+def build_current_summary(df, sp_df):
+    """
+    Build summary rows for the latest scrape date in df.
+    Returns DataFrame with columns matching SUMMARY_COLS.
+    """
+    latest_date = df["scrape_date"].max()
+    df_latest = df[df["scrape_date"] == latest_date].copy()
+
+    grp = (
+        df_latest.groupby(["reit", "macro_market", "beds"], dropna=False)
+        .agg(
+            listing_count=("unit_id", "count"),
+            avg_rent=("rent", "mean"),
+            median_rent=("rent", "median"),
+            avg_sqft=("sqft", "mean"),
+            concession_rate=("has_concession", "mean"),
+            avg_concession_value=("concession_value", "mean"),
+        )
+        .reset_index()
+    )
+
+    # Compute rent_per_sqft
+    grp["rent_per_sqft"] = grp.apply(
+        lambda r: r["avg_rent"] / r["avg_sqft"] if pd.notna(r["avg_sqft"]) and r["avg_sqft"] > 0 else None,
+        axis=1,
+    )
+
+    grp["scrape_date"] = str(latest_date)[:10]
+
+    # Merge same-property columns if available
+    sp_cols = ["sp_count", "sp_avg_rent_curr", "sp_avg_rent_prev",
+               "sp_wow_pct", "sp_concession_rate_curr", "sp_concession_rate_prev"]
+    for c in sp_cols:
+        grp[c] = None
+
+    if not sp_df.empty:
+        sp_latest = sp_df[sp_df["date_curr"] == sp_df["date_curr"].max()].copy()
+        sp_latest = sp_latest.rename(columns={"macro_market": "macro_market"})
+        merge_keys = ["reit", "macro_market", "beds"]
+        sp_subset = sp_latest[merge_keys + sp_cols].copy()
+        grp = grp.drop(columns=sp_cols, errors="ignore")
+        grp = pd.merge(grp, sp_subset, on=merge_keys, how="left")
+
+    # Ensure all columns present and ordered
+    for c in SUMMARY_COLS:
+        if c not in grp.columns:
+            grp[c] = None
+
+    return grp[SUMMARY_COLS]
+
+
+def update_summary_history(existing_history_df, new_summary_df):
+    """
+    Append new_summary_df rows to existing_history_df, skipping dates already present.
+    Returns the updated DataFrame.
+    """
+    if existing_history_df is None or existing_history_df.empty:
+        print(f"  Summary history: creating new with {len(new_summary_df):,} rows")
+        return new_summary_df.copy()
+
+    existing_dates = set(existing_history_df["scrape_date"].astype(str).unique())
+    new_date = str(new_summary_df["scrape_date"].iloc[0])
+
+    if new_date in existing_dates:
+        print(f"  Summary history: date {new_date} already exists, skipping append")
+        return existing_history_df.copy()
+
+    combined = pd.concat([existing_history_df, new_summary_df], ignore_index=True)
+    print(f"  Summary history: appended {len(new_summary_df):,} rows for {new_date} "
+          f"(total: {len(combined):,} rows)")
+    return combined
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # EXCEL HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1143,15 +1308,17 @@ def build_inputs_sheet(wb, df, registry_df, latest_date_str):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SHEET 2: Data (raw panel)
+# SHEET 2: Data (latest week raw panel)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_data_sheet(wb, df):
-    ws = wb.create_sheet("Data")
+def _write_raw_data_sheet(wb, df, sheet_name, header_fill=None):
+    """Shared helper to write a raw data sheet (Data or Data_Prior)."""
+    ws = wb.create_sheet(sheet_name)
     ws.sheet_view.showGridLines = False
+    fill = header_fill or HEADER_FILL
 
     display_cols = [c for c in EXPECTED_COLS + ["macro_market"] if c in df.columns]
-    write_header_row(ws, 1, display_cols)
+    write_header_row(ws, 1, display_cols, fill=fill)
 
     fmts = []
     for c in display_cols:
@@ -1165,7 +1332,6 @@ def build_data_sheet(wb, df):
     for i, row in enumerate(df[display_cols].itertuples(index=False), start=2):
         alt = (i % 2 == 0)
         vals = list(row)
-        # Convert Timestamp to string for Excel
         vals_clean = [
             v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else
             (None if (isinstance(v, float) and pd.isna(v)) else v)
@@ -1180,6 +1346,85 @@ def build_data_sheet(wb, df):
         ltr = get_column_letter(idx)
         widths[ltr] = max(12, len(col) + 2)
     set_col_widths(ws, widths)
+    return ws
+
+
+def build_data_sheet(wb, df):
+    """Build Data sheet with latest week only."""
+    latest = df["scrape_date"].max()
+    df_latest = df[df["scrape_date"] == latest].copy()
+    print(f"    Data sheet: {len(df_latest):,} rows (latest period: {str(latest)[:10]})")
+    return _write_raw_data_sheet(wb, df_latest, "Data")
+
+
+def build_data_prior_sheet(wb, df):
+    """Build Data_Prior sheet with the prior week's raw data."""
+    dates = sorted(df["scrape_date"].dropna().unique())
+    if len(dates) < 2:
+        ws = wb.create_sheet("Data_Prior")
+        ws.sheet_view.showGridLines = False
+        ws.cell(row=1, column=1,
+                value="No prior period data yet — run again after Week 2 scrape").font = Font(
+            name="Arial", italic=True, color="888888", size=10)
+        print("    Data_Prior sheet: no prior period data")
+        return ws
+    prior_date = dates[-2]
+    df_prior = df[df["scrape_date"] == prior_date].copy()
+    # Gray header to distinguish from current
+    prior_fill = PatternFill("solid", fgColor="607D8B")
+    print(f"    Data_Prior sheet: {len(df_prior):,} rows (prior period: {str(prior_date)[:10]})")
+    return _write_raw_data_sheet(wb, df_prior, "Data_Prior", header_fill=prior_fill)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHEET: Summary_History (persistent time series)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_summary_history_sheet(wb, summary_history_df):
+    """Write full summary_history time series to a sheet."""
+    ws = wb.create_sheet("Summary_History")
+    ws.sheet_view.showGridLines = False
+    add_title(ws, "Summary History — All Periods", row=1)
+
+    if summary_history_df is None or summary_history_df.empty:
+        ws.cell(row=3, column=1, value="No summary history data yet.").font = Font(
+            name="Arial", italic=True, color="888888", size=10)
+        return ws
+
+    headers = list(summary_history_df.columns)
+    write_header_row(ws, 2, headers)
+
+    fmts = []
+    for c in headers:
+        if c in ("avg_rent", "median_rent", "avg_concession_value",
+                 "sp_avg_rent_curr", "sp_avg_rent_prev"):
+            fmts.append(NUM_CURRENCY)
+        elif c in ("concession_rate", "sp_wow_pct", "sp_concession_rate_curr",
+                    "sp_concession_rate_prev", "rent_per_sqft"):
+            fmts.append(NUM_PCT if "rate" in c or "pct" in c.lower() else '#,##0.00')
+        elif c in ("listing_count", "avg_sqft", "sp_count"):
+            fmts.append(NUM_COMMA)
+        else:
+            fmts.append(None)
+
+    for i, row in enumerate(summary_history_df.itertuples(index=False), start=3):
+        alt = (i % 2 == 0)
+        vals = [
+            v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else
+            (None if (isinstance(v, float) and pd.isna(v)) else v)
+            for v in row
+        ]
+        write_data_row(ws, i, vals, alt=alt, number_formats=fmts)
+
+    freeze_top_row(ws)
+    widths = {}
+    for idx, col in enumerate(headers, start=1):
+        ltr = get_column_letter(idx)
+        widths[ltr] = max(12, len(str(col)) + 2)
+    set_col_widths(ws, widths)
+
+    n_dates = summary_history_df["scrape_date"].nunique() if "scrape_date" in summary_history_df.columns else 0
+    print(f"    Summary_History sheet: {len(summary_history_df):,} rows, {n_dates} period(s)")
     return ws
 
 
@@ -1456,9 +1701,10 @@ def build_charts_concessions_sheet(wb, df):
 # SHEET 8: Same_Prop_Trends
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_same_prop_sheet(wb, df, sp_df):
+def build_same_prop_sheet(wb, df, sp_df, summary_history_df=None):
     """
     Build Same_Prop_Trends with hardcoded values + methodology comments.
+    Uses summary_history_df for the rent index chart (full history).
     """
     ws = wb.create_sheet("Same_Prop_Trends")
     ws.sheet_view.showGridLines = False
@@ -1548,7 +1794,7 @@ def build_same_prop_sheet(wb, df, sp_df):
 
     n_data = len(data_rows)
 
-    # ── Same-Property Avg Rent by REIT (raw $) ──
+    # ── Same-Property Avg Rent by REIT (raw $) — from sp_df (current 2 weeks) ──
     rent_start = 4 + n_data + 3
     ws.cell(row=rent_start - 1, column=1,
             value="Same-Property Avg Rent by REIT ($)").font = SUBHEAD_FONT
@@ -1558,7 +1804,7 @@ def build_same_prop_sheet(wb, df, sp_df):
 
     reits = sorted(sp_df["reit"].dropna().unique())
 
-    # Build avg rent per REIT per date from sp_df
+    # Build avg rent per REIT per date from sp_df (current 2-week window)
     first_prev = sp_df["date_prev"].min()
     reit_date_rent_base = (
         sp_df[sp_df["date_prev"] == first_prev]
@@ -1593,20 +1839,47 @@ def build_same_prop_sheet(wb, df, sp_df):
 
     n_rent_rows = len(pivot_rent)
 
-    # ── Rent Index (Base = 100) ──
+    # ── Rent Index (Base = 100) — uses FULL history from summary_history_df ──
     idx_start = rent_start + n_rent_rows + 3
     ws.cell(row=idx_start - 1, column=1,
             value="Rent Index (Base = 100)").font = SUBHEAD_FONT
     ws.cell(row=idx_start - 1, column=4,
             value="CALC: (Avg rent on date N / Avg rent on base date) x 100. "
-                  "Base date is the first scrape period. Values >100 = rent increase, <100 = decline.").font = legend_font
+                  "Base date is the first scrape period. Uses FULL history from summary_history.csv.").font = legend_font
 
-    # Normalize to base 100
-    pivot_index = pivot_rent.copy()
-    for reit in pivot_index.columns:
-        first_val = pivot_index[reit].dropna().iloc[0] if not pivot_index[reit].dropna().empty else None
-        if first_val and first_val != 0:
-            pivot_index[reit] = (pivot_index[reit] / first_val * 100).round(2)
+    # Build rent index from summary_history (full history) if available,
+    # otherwise fall back to sp_df (current 2-week window only)
+    pivot_index = None
+    if (summary_history_df is not None and not summary_history_df.empty
+            and "sp_avg_rent_curr" in summary_history_df.columns):
+        hist = summary_history_df.copy()
+        # Filter to rows that have sp data
+        hist_sp = hist.dropna(subset=["sp_avg_rent_curr"])
+        if not hist_sp.empty:
+            # For each REIT + date, compute avg of sp_avg_rent_curr across all markets/beds
+            hist_rent = (
+                hist_sp.groupby(["reit", "scrape_date"])["sp_avg_rent_curr"]
+                .mean().reset_index()
+                .rename(columns={"scrape_date": "date", "sp_avg_rent_curr": "avg_rent"})
+            )
+            hist_rent = hist_rent.sort_values("date")
+            pivot_index_raw = hist_rent.pivot(index="date", columns="reit", values="avg_rent")
+            # Index to base 100
+            pivot_index = pivot_index_raw.copy()
+            for reit_col in pivot_index.columns:
+                first_val = pivot_index[reit_col].dropna().iloc[0] if not pivot_index[reit_col].dropna().empty else None
+                if first_val and first_val != 0:
+                    pivot_index[reit_col] = (pivot_index[reit_col] / first_val * 100).round(2)
+            reits_for_index = list(pivot_index.columns)
+
+    if pivot_index is None:
+        # Fall back to sp_df (2-week window)
+        pivot_index = pivot_rent.copy()
+        for reit_col in pivot_index.columns:
+            first_val = pivot_index[reit_col].dropna().iloc[0] if not pivot_index[reit_col].dropna().empty else None
+            if first_val and first_val != 0:
+                pivot_index[reit_col] = (pivot_index[reit_col] / first_val * 100).round(2)
+        reits_for_index = reits
 
     idx_hdr = ["Date"] + list(pivot_index.columns)
     write_header_row(ws, idx_start, idx_hdr)
@@ -1618,15 +1891,15 @@ def build_same_prop_sheet(wb, df, sp_df):
     for i, (dt, row_series) in enumerate(pivot_index.iterrows()):
         r = idx_start + 1 + i
         row_vals = [str(dt)[:10]] + [
-            float(row_series[reit]) if pd.notna(row_series.get(reit)) else None
-            for reit in pivot_index.columns
+            float(row_series[reit_col]) if pd.notna(row_series.get(reit_col)) else None
+            for reit_col in pivot_index.columns
         ]
         write_data_row(ws, r, row_vals, alt=(i % 2 == 1))
 
     n_idx_rows = len(pivot_index)
 
     # ── Line chart from index table ──
-    if n_idx_rows >= 2 and reits:
+    if n_idx_rows >= 2 and len(pivot_index.columns) > 0:
         line_chart = LineChart()
         line_chart.title    = "Same-Property Avg Rent Index (Base = 100)"
         line_chart.y_axis.title = "Rent Index"
@@ -1637,7 +1910,7 @@ def build_same_prop_sheet(wb, df, sp_df):
 
         data_ref = Reference(
             ws,
-            min_col=2, max_col=1 + len(reits),
+            min_col=2, max_col=1 + len(pivot_index.columns),
             min_row=idx_start,
             max_row=idx_start + n_idx_rows,
         )
@@ -1665,43 +1938,54 @@ def build_same_prop_sheet(wb, df, sp_df):
 def main():
     print("=" * 60)
     print("  REIT Rental Analysis — Excel Workbook Builder")
+    print("  Architecture: 2-week download + persistent summary_history")
     print("=" * 60)
 
     if not GITHUB_TOKEN:
         print("\n[WARNING] GITHUB_TOKEN is empty. Requests will be unauthenticated.")
         print("  Set GITHUB_TOKEN at the top of this script for private repos.\n")
 
-    # Step 1+2: Download from GitHub with caching
-    raw_files = fetch_all_csvs()
+    # Step 1: Download latest 2 weeks of CSVs from GitHub
+    raw_files = fetch_latest_2_weeks_csvs()
 
     if not raw_files:
         print("[ERROR] No files downloaded. Check token, owner, repo, and DATA_PATH.")
         sys.exit(1)
 
+    # Step 1b: Download existing summary_history.csv from GitHub
+    existing_history = fetch_summary_history()
+
+    # Step 1c: Download registry
+    print("\n[Step 1b] Fetching unit registry...")
+    registry_df = fetch_registry()
+
     # Step 2b: Merge parts
     print("\n[Step 2b] Merging part files...")
     merged_files = merge_parts(raw_files)
 
-    # Step 3: Build panel
+    # Step 3: Build panel (latest 2 weeks only)
     print("\n[Step 3] Building panel dataset...")
     df = build_panel(merged_files)
-
-    # Also download registry (informational — not required for core analysis)
-    print("\n[Step 1b] Fetching unit registry...")
-    registry_df = fetch_registry()
 
     # Step 4: Macro-market mapping
     print("\n[Step 4] Applying macro-market mapping...")
     df = apply_macro_map(df)
 
-    # Step 5: Same-property analysis
+    # Step 5: Same-property analysis (2-week window)
     print("\n[Step 5] Computing same-property metrics...")
     sp_df = compute_same_property(df)
+
+    # Step 5b: Build & update summary_history
+    print("\n[Step 5b] Updating summary history...")
+    current_summary = build_current_summary(df, sp_df)
+    summary_history_df = update_summary_history(existing_history, current_summary)
+
+    # Save summary_history locally
+    save_summary_history(summary_history_df)
 
     # Step 6: Build Excel
     print("\n[Step 6] Building Excel workbook...")
     wb = Workbook()
-    # Remove default sheet
     if "Sheet" in wb.sheetnames:
         del wb["Sheet"]
 
@@ -1710,8 +1994,16 @@ def main():
 
     print("  Building: Inputs")
     build_inputs_sheet(wb, df, registry_df, latest_date_str)
-    print("  Building: Data")
+
+    print("  Building: Data (latest week only)")
     build_data_sheet(wb, df)
+
+    print("  Building: Data_Prior (prior week)")
+    build_data_prior_sheet(wb, df)
+
+    print("  Building: Summary_History (all periods)")
+    build_summary_history_sheet(wb, summary_history_df)
+
     print("  Building: Market_Calcs")
     build_market_calcs_sheet(wb, df)
     print("  Building: REIT_Summary")
@@ -1723,19 +2015,27 @@ def main():
     print("  Building: Charts_Concessions")
     build_charts_concessions_sheet(wb, df)
     print("  Building: Same_Prop_Trends")
-    build_same_prop_sheet(wb, df, sp_df)
+    build_same_prop_sheet(wb, df, sp_df, summary_history_df=summary_history_df)
 
-    # Step 7: Save
+    # Step 7: Save Excel
     out_filename = f"REIT_Rental_Analysis_{latest_date_str}.xlsx"
     out_path = os.path.join(OUTPUT_DIR, out_filename)
     out_path = os.path.normpath(out_path)
     wb.save(out_path)
 
     file_size_kb = os.path.getsize(out_path) / 1024
+
+    # Print row counts for verification
+    print(f"\n  --- Sheet Row Counts ---")
+    for sname in wb.sheetnames:
+        ws = wb[sname]
+        print(f"    {sname}: {ws.max_row:,} rows")
+
     print(f"\n{'=' * 60}")
     print(f"  Output saved: {out_path}")
     print(f"  File size:    {file_size_kb:.1f} KB")
     print(f"  Sheets:       {', '.join(wb.sheetnames)}")
+    print(f"  Summary history: {LOCAL_SUMMARY_DIR}/summary_history.csv")
     print(f"{'=' * 60}\n")
 
 
