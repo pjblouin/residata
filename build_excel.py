@@ -894,6 +894,25 @@ def build_panel(file_list):
     period_labels = ", ".join(str(d.date()) for d in sorted(panel["scrape_date"].unique()))
     print(f"  Panel: {len(panel):,} rows, {n_periods} period(s) [{period_labels}], "
           f"{panel['reit'].nunique()} REIT(s)")
+
+    # ── ESS concession fix: week 1 data was scraped with a bug that missed
+    # the property-offer-cta DOM element. Null out concession fields for ESS
+    # on the earliest period so they're excluded from all comparisons.
+    # Rent data is unaffected and remains valid.
+    ess_first_mask = (panel["reit"] == "ESS") & (panel["scrape_date"] == panel["scrape_date"].min())
+    if ess_first_mask.any():
+        # Convert has_concession to nullable before assigning NaN
+        if "has_concession" in panel.columns:
+            panel["has_concession"] = panel["has_concession"].astype("object")
+        conc_cols = ["has_concession", "concession_hardness", "concession_raw",
+                     "concession_type", "concession_value", "concession_pct_lease_value",
+                     "concession_pct_lease_term", "effective_monthly_rent"]
+        for col in conc_cols:
+            if col in panel.columns:
+                panel.loc[ess_first_mask, col] = None
+        print(f"  [FIX] Nulled ESS concession fields for first period ({panel['scrape_date'].min().date()}) "
+              f"— {ess_first_mask.sum():,} rows. Scraper bug (fixed week 2).")
+
     return panel
 
 
