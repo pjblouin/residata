@@ -615,6 +615,111 @@ NUM_CURRENCY  = '$#,##0'
 NUM_PCT       = '0.0%'
 NUM_COMMA     = '#,##0'
 
+# ─────────────────────────────────────────────────────────────────────────────
+# FIXED COLOR PALETTES — consistent across all charts
+# ─────────────────────────────────────────────────────────────────────────────
+
+# REIT colors (used in any multi-REIT chart)
+REIT_COLORS = {
+    "MAA":  "2E8B57",  # sea green
+    "CPT":  "1F77B4",  # steel blue
+    "EQR":  "D62728",  # crimson
+    "AVB":  "FF7F0E",  # orange
+    "UDR":  "9467BD",  # purple
+    "ESS":  "E377C2",  # pink
+    "INVH": "8C564B",  # brown
+    "AMH":  "17BECF",  # teal
+}
+
+# Market colors (used in any multi-market chart)
+MARKET_COLORS = {
+    "Atlanta":              "D62728",  # red
+    "Dallas/Fort Worth":    "1F77B4",  # blue
+    "Houston":              "FF7F0E",  # orange
+    "Phoenix":              "2CA02C",  # green
+    "Tampa":                "9467BD",  # purple
+    "Orlando":              "8C564B",  # brown
+    "Charlotte":            "E377C2",  # pink
+    "Nashville":            "7F7F7F",  # gray
+    "Raleigh/Durham":       "BCBD22",  # olive
+    "Austin":               "17BECF",  # teal
+    "Denver":               "AEC7E8",  # light blue
+    "Miami/Fort Lauderdale":"FF9896",  # salmon
+    "Washington, DC":       "003B70",  # navy
+    "New York":             "393B79",  # dark blue
+    "Boston":               "637939",  # dark olive
+    "San Francisco":        "8C6D31",  # dark gold
+    "San Jose":             "843C39",  # dark red
+    "Los Angeles":          "7B4173",  # plum
+    "San Diego":            "5254A3",  # indigo
+    "Seattle":              "6B6ECF",  # periwinkle
+    "Orange County":        "E7969C",  # light rose
+    "San Francisco-East Bay":"B5CF6B", # lime
+    "Jacksonville":         "CE6DBD",  # orchid
+    "Charleston":           "DE9ED6",  # lavender
+    "Savannah":             "D6616B",  # dark salmon
+    "Las Vegas":            "E7BA52",  # gold
+    "Portland":             "3182BD",  # medium blue
+    "Salt Lake City":       "6BAED6",  # sky blue
+    "Inland Empire":        "FD8D3C",  # dark orange
+    "San Antonio":          "FDAE6B",  # light orange
+    "Philadelphia":         "31A354",  # forest green
+    "Baltimore":            "74C476",  # medium green
+    "Richmond":             "756BB1",  # medium purple
+    "Greenville":           "9E9AC8",  # light purple
+    "Memphis":              "636363",  # dark gray
+    "Birmingham":           "969696",  # medium gray
+    "Huntsville":           "BDBDBD",  # light gray
+    "Chicago":              "E6550D",  # burnt orange
+    "Minneapolis":          "A1D99B",  # mint
+    "Kansas City":          "C7E9C0",  # pale green
+    "Hampton Roads":        "DADAEB",  # pale lavender
+    "Chattanooga":          "9C9EDE",  # blue-gray
+    "Gainesville":          "CEDB9C",  # sage
+    "Tallahassee":          "E7CB94",  # tan
+    "Gulf Shores":          "F7B6D2",  # light pink
+    "Panama City Beach":    "FDD0A2",  # peach
+    "Charlottesville":      "C49C94",  # dusty rose
+    "Louisville":           "C5B0D5",  # thistle
+    "Colorado Springs":     "98DF8A",  # light green
+    "Santa Barbara":        "DBDB8D",  # khaki
+    "Salinas/Monterey":     "ADB5BD",  # blue-gray
+}
+
+# Fallback palette for anything not in the dicts above
+_FALLBACK_COLORS = [
+    "1F77B4", "FF7F0E", "2CA02C", "D62728", "9467BD",
+    "8C564B", "E377C2", "7F7F7F", "BCBD22", "17BECF",
+    "AEC7E8", "FFBB78", "98DF8A", "FF9896", "C5B0D5",
+]
+
+
+def _apply_series_colors(chart, series_names, color_dict):
+    """Apply consistent colors to chart series based on a name->color dict."""
+    from openpyxl.chart.series import DataPoint
+    from openpyxl.drawing.fill import PatternFillProperties, ColorChoice
+    for i, series in enumerate(chart.series):
+        name = series_names[i] if i < len(series_names) else None
+        if name and name in color_dict:
+            hex_color = color_dict[name]
+        else:
+            hex_color = _FALLBACK_COLORS[i % len(_FALLBACK_COLORS)]
+        series.graphicalProperties.line.solidFill = hex_color
+        # Also set marker color for line charts
+        if hasattr(series, 'marker') and series.marker:
+            series.marker.graphicalProperties.solidFill = hex_color
+
+
+def _apply_bar_colors(chart, series_names, color_dict):
+    """Apply consistent colors to bar chart series."""
+    for i, series in enumerate(chart.series):
+        name = series_names[i] if i < len(series_names) else None
+        if name and name in color_dict:
+            hex_color = color_dict[name]
+        else:
+            hex_color = _FALLBACK_COLORS[i % len(_FALLBACK_COLORS)]
+        series.graphicalProperties.solidFill = hex_color
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FILENAME PARSING (must be before download functions that use it)
@@ -1722,6 +1827,7 @@ def build_charts_rent_sheet(wb, df):
         cats_ref = Reference(ws, min_col=1, min_row=4, max_row=3 + len(reits))
         chart.add_data(data_ref, titles_from_data=True)
         chart.set_categories(cats_ref)
+        # Color each series by bed type (not REIT-based, use fallback)
         ws.add_chart(chart, f"A{5 + len(reits)}")
 
     freeze_top_row(ws)
@@ -1779,6 +1885,7 @@ def build_charts_concessions_sheet(wb, df):
         cats_ref = Reference(ws, min_col=1, min_row=4, max_row=3 + len(dates_sorted))
         chart.add_data(data_ref, titles_from_data=True)
         chart.set_categories(cats_ref)
+        _apply_series_colors(chart, reits_sorted, REIT_COLORS)
         ws.add_chart(chart, f"A{5 + len(dates_sorted)}")
 
     freeze_top_row(ws)
@@ -1889,6 +1996,7 @@ def _write_index_section(ws, start_row, title, calc_desc, pivot_index, chart_tit
         cats_ref = Reference(ws, min_col=1, min_row=start_row + 1, max_row=start_row + n_idx_rows)
         line_chart.add_data(data_ref, titles_from_data=True)
         line_chart.set_categories(cats_ref)
+        _apply_series_colors(line_chart, list(pivot_index.columns), REIT_COLORS)
         ws.add_chart(line_chart, f"A{start_row + n_idx_rows + 2}")
         return start_row + n_idx_rows + 2 + 18  # chart height ~18 rows
     else:
@@ -2341,6 +2449,7 @@ def build_reit_market_sheets(wb, df, sp_df, summary_history_df):
                                      min_row=current_row + 1, max_row=current_row + n_mini)
                 chart.add_data(data_ref, titles_from_data=True)
                 chart.set_categories(cats_ref)
+                _apply_series_colors(chart, mkt_order, MARKET_COLORS)
                 ws.add_chart(chart, f"A{current_row + n_mini + 2}")
                 current_row = current_row + n_mini + 2 + 18
             else:
@@ -2437,6 +2546,7 @@ def build_market_comparison_sheet(wb, df, sp_df, summary_history_df):
                                      min_row=current_row + 1, max_row=current_row + n_reits)
                 chart.add_data(data_ref, titles_from_data=True)
                 chart.set_categories(cats_ref)
+                # Bar chart with single series — color individual bars by REIT
                 ws.add_chart(chart, f"D{current_row}")
                 current_row += n_reits + 20
 
@@ -2491,6 +2601,7 @@ def build_market_comparison_sheet(wb, df, sp_df, summary_history_df):
                                  min_row=current_row + 1, max_row=current_row + n_rows)
             chart.add_data(data_ref, titles_from_data=True)
             chart.set_categories(cats_ref)
+            _apply_series_colors(chart, reits_with_data, REIT_COLORS)
             ws.add_chart(chart, f"A{current_row + n_rows + 2}")
             current_row = current_row + n_rows + 2 + 18
         else:
