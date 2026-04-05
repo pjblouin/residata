@@ -864,9 +864,34 @@ def build_panel(file_list):
 
     # Sort
     panel["scrape_date"] = pd.to_datetime(panel["scrape_date"], errors="coerce")
+
+    # ── Normalize scrape dates to weekly periods ──
+    # Scrapes run over a weekend (e.g. Sat night → Sun morning). Snap each date
+    # to the Saturday of that week so Mar-30 and Mar-31 become the same period,
+    # and Apr-4 and Apr-5 become the same period, etc.
+    # Formula: date - (weekday offset from Saturday).  Saturday=5 in pandas.
+    def snap_to_saturday(dt):
+        if pd.isna(dt):
+            return dt
+        offset = (dt.weekday() - 5) % 7  # 0 if already Saturday
+        return dt - pd.Timedelta(days=offset)
+
+    panel["scrape_date"] = panel["scrape_date"].apply(snap_to_saturday)
+
+    # Re-deduplicate after date normalization (same unit may appear on both
+    # Mar-30 and Mar-31 → now both are Mar-29 Saturday; keep the latest)
+    before_dedup2 = len(panel)
+    panel = panel.drop_duplicates(subset=["unit_id", "scrape_date"], keep="last")
+    after_dedup2 = len(panel)
+    if before_dedup2 != after_dedup2:
+        print(f"  Post-normalization dedup: {before_dedup2:,} -> {after_dedup2:,} rows "
+              f"(removed {before_dedup2 - after_dedup2:,} dupes)")
+
     panel = panel.sort_values(["scrape_date", "reit", "unit_id"]).reset_index(drop=True)
 
-    print(f"  Panel: {len(panel):,} rows, {panel['scrape_date'].nunique()} date(s), "
+    n_periods = panel["scrape_date"].nunique()
+    period_labels = ", ".join(str(d.date()) for d in sorted(panel["scrape_date"].unique()))
+    print(f"  Panel: {len(panel):,} rows, {n_periods} period(s) [{period_labels}], "
           f"{panel['reit'].nunique()} REIT(s)")
     return panel
 
