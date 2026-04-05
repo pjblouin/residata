@@ -393,6 +393,198 @@ MACRO_MAP = {
     "Louisville": "Louisville",
     "Santa Barbara": "Santa Barbara", "Goleta": "Santa Barbara",
     "Ventura": "Santa Barbara", "Oxnard": "Santa Barbara",
+    "Camarillo": "Santa Barbara",
+
+    # Baltimore (new macro-market)
+    "Baltimore": "Baltimore", "Linthicum Heights": "Baltimore",
+    "Annapolis": "Baltimore", "Hunt Valley": "Baltimore", "Laurel": "Baltimore",
+    "Columbia MD": "Baltimore", "Wheaton": "Baltimore", "Towson": "Baltimore",
+
+    # Chicago (new macro-market)
+    "Chicago": "Chicago",
+
+    # Minneapolis (new macro-market)
+    "Minneapolis": "Minneapolis",
+
+    # Chattanooga (new macro-market)
+    "Chattanooga": "Chattanooga",
+
+    # Gainesville (new macro-market)
+    "Gainesville": "Gainesville",
+
+    # Orange County — self-mapping for when the literal label appears
+    "Orange County": "Orange County",
+
+    # South Florida / Bay Area generic labels
+    "South Florida": "Miami/Fort Lauderdale",
+    "Bay Area": "San Francisco-East Bay",
+    "San Francisco Bay Area": "San Francisco-East Bay",
+    "Southern California": "Los Angeles",
+
+    # Additional Miami/Fort Lauderdale
+    "Doral": "Miami/Fort Lauderdale", "Coconut Creek": "Miami/Fort Lauderdale",
+
+    # Additional Seattle
+    "Newcastle": "Seattle", "Woodinville": "Seattle", "Mill Creek": "Seattle",
+    "Mercer Island": "Seattle",
+
+    # Additional San Francisco-East Bay
+    "Dublin": "San Francisco-East Bay", "Emeryville": "San Francisco-East Bay",
+    "Union City": "San Francisco-East Bay", "San Rafael": "San Francisco-East Bay",
+    "Tiburon": "San Francisco-East Bay",
+
+    # Additional San Jose
+    "Menlo Park": "San Jose",
+
+    # Additional Los Angeles
+    "Studio City": "Los Angeles", "Calabasas": "Los Angeles",
+    "Agoura Hills": "Los Angeles", "Artesia": "Los Angeles",
+    "Playa Vista": "Los Angeles", "Valencia": "Los Angeles",
+    "Valley Village": "Los Angeles", "Newbury Park": "Los Angeles",
+    "La Habra": "Los Angeles", "Walnut": "Los Angeles",
+    "Chino Hills": "Los Angeles",
+
+    # Additional San Diego
+    "Bonita": "San Diego", "Spring Valley": "San Diego",
+
+    # Additional New York (northern NJ + Long Island)
+    "Roseland": "New York", "West Windsor": "New York",
+    "Florham Park": "New York", "Wharton": "New York",
+    "Pine Brook": "New York", "Old Bridge": "New York",
+    "Boonton": "New York", "Piscataway": "New York",
+    "Maplewood": "New York", "Bloomfield": "New York",
+    "Union NJ": "New York", "North Bergen": "New York",
+    "Bloomingdale": "New York", "Teaneck": "New York",
+    "Long Island City": "New York", "Amityville": "New York",
+    "Westbury": "New York", "Garden City": "New York",
+    "Rockville Centre": "New York", "Smithtown": "New York",
+    "Melville": "New York", "Island Park": "New York",
+    "Great Neck": "New York", "Huntington Station": "New York",
+    "Baldwin Place": "New York", "Harrison": "New York",
+
+    # Additional Boston
+    "South Easton": "Boston", "Northborough": "Boston",
+    "Chestnut Hill": "Boston", "Saugus": "Boston", "Hingham": "Boston",
+    "Plymouth": "Boston",
+
+    # Additional Washington, DC
+    "North Potomac": "Washington, DC", "North Bethesda": "Washington, DC",
+    "Vienna": "Washington, DC", "Tysons Corner": "Washington, DC",
+
+    # Additional Dallas/Fort Worth
+    "Benbrook": "Dallas/Fort Worth",
+
+    # Additional Austin
+    "Bee Cave": "Austin",
+
+    # Additional Denver
+    "Castle Rock": "Denver", "Lafayette": "Denver",
+
+    # Additional Charlotte
+    "Mooresville NC": "Charlotte",
+
+    # APT 1, KENNESAW → Atlanta (bad data)
+    "APT 1, KENNESAW": "Atlanta",
+}
+
+# Secondary map for "City, ST" format entries that can't be handled by
+# stripping the state suffix alone (ambiguous city names, abbreviations, etc.)
+_CITY_ST_MAP = {
+    # Baltimore
+    "Linthicum Heights, MD": "Baltimore", "Annapolis, MD": "Baltimore",
+    "Hunt Valley, MD": "Baltimore", "Laurel, MD": "Baltimore",
+    "Columbia, MD": "Baltimore", "Wheaton, MD": "Baltimore", "Towson, MD": "Baltimore",
+
+    # Miami/Fort Lauderdale
+    "South Miami, FL": "Miami/Fort Lauderdale", "Miramar, FL": "Miami/Fort Lauderdale",
+    "Doral, FL": "Miami/Fort Lauderdale", "Coconut Creek, FL": "Miami/Fort Lauderdale",
+    "West Palm Beach, FL": "Miami/Fort Lauderdale", "Hialeah, FL": "Miami/Fort Lauderdale",
+    "Margate, FL": "Miami/Fort Lauderdale",
+
+    # San Francisco-East Bay
+    "Dublin, CA": "San Francisco-East Bay", "Emeryville, CA": "San Francisco-East Bay",
+    "Union City, CA": "San Francisco-East Bay",
+
+    # San Francisco
+    "San Bruno, CA": "San Francisco", "Pacifica, CA": "San Francisco",
+
+    # Charlotte
+    "Mooresville, NC": "Charlotte",
+
+    # Northern NJ → New York
+    "Roseland, NJ": "New York", "West Windsor, NJ": "New York",
+    "Somerville, NJ": "New York", "Florham Park, NJ": "New York",
+    "Wharton, NJ": "New York", "Pine Brook, NJ": "New York",
+    "Old Bridge, NJ": "New York", "Boonton, NJ": "New York",
+    "Piscataway, NJ": "New York", "Maplewood, NJ": "New York",
+    "Bloomfield, NJ": "New York", "Union, NJ": "New York",
+    "North Bergen, NJ": "New York", "Bloomingdale, NJ": "New York",
+    "Teaneck, NJ": "New York",
+
+    # Long Island / NY suburbs → New York
+    "Long Island City, NY": "New York", "Amityville, NY": "New York",
+    "Westbury, NY": "New York", "Garden City, NY": "New York",
+    "Rockville Centre, NY": "New York", "Smithtown, NY": "New York",
+    "Melville, NY": "New York", "Island Park, NY": "New York",
+    "Great Neck, NY": "New York", "Huntington Station, NY": "New York",
+    "Baldwin Place, NY": "New York", "Harrison, NY": "New York",
+
+    # Austin
+    "Pflugerville, TX": "Austin", "Georgetown, TX": "Austin", "Bee Cave, TX": "Austin",
+
+    # Los Angeles
+    "Woodland Hills, CA": "Los Angeles", "Studio City, CA": "Los Angeles",
+    "Calabasas, CA": "Los Angeles", "Agoura Hills, CA": "Los Angeles",
+    "Pasadena, CA": "Los Angeles", "Simi Valley, CA": "Los Angeles",
+    "Glendora, CA": "Los Angeles", "Pomona, CA": "Los Angeles",
+    "San Dimas, CA": "Los Angeles", "Artesia, CA": "Los Angeles",
+    "Monrovia, CA": "Los Angeles", "Canoga Park, CA": "Los Angeles",
+    "Encino, CA": "Los Angeles", "Cerritos, CA": "Los Angeles",
+    "Chino Hills, CA": "Los Angeles", "Thousand Oaks, CA": "Los Angeles",
+    "Santa Monica, CA": "Los Angeles",
+
+    # Santa Barbara
+    "Camarillo, CA": "Santa Barbara",
+
+    # Orange County
+    "Seal Beach, CA": "Orange County", "Huntington Beach, CA": "Orange County",
+    "Brea, CA": "Orange County", "Rancho Santa Marg, CA": "Orange County",
+    "Lake Forest, CA": "Orange County", "Mission Viejo, CA": "Orange County",
+
+    # San Diego
+    "Vista, CA": "San Diego", "La Mesa, CA": "San Diego",
+    "San Marcos, CA": "San Diego",
+
+    # Dallas/Fort Worth
+    "Carrollton, TX": "Dallas/Fort Worth", "Lewisville, TX": "Dallas/Fort Worth",
+    "Flower Mound, TX": "Dallas/Fort Worth", "Benbrook, TX": "Dallas/Fort Worth",
+    "Allen, TX": "Dallas/Fort Worth", "Addison, TX": "Dallas/Fort Worth",
+
+    # Boston
+    "Somerville, MA": "Boston", "Acton, MA": "Boston",
+    "South Easton, MA": "Boston", "Northborough, MA": "Boston",
+    "Chestnut Hill, MA": "Boston", "Saugus, MA": "Boston",
+    "Natick, MA": "Boston", "Hingham, MA": "Boston",
+    "North Andover, MA": "Boston", "Norwood, MA": "Boston",
+    "Framingham, MA": "Boston", "Sudbury, MA": "Boston",
+    "Plymouth, MA": "Boston", "Bedford, MA": "Boston", "Milford, MA": "Boston",
+
+    # Washington, DC
+    "North Potomac, MD": "Washington, DC", "North Bethesda, MD": "Washington, DC",
+    "Vienna, VA": "Washington, DC", "Tysons Corner, VA": "Washington, DC",
+
+    # Denver
+    "Littleton, CO": "Denver", "Castle Rock, CO": "Denver", "Lafayette, CO": "Denver",
+
+    # Seattle
+    "Lynnwood, WA": "Seattle", "Newcastle, WA": "Seattle",
+    "Woodinville, WA": "Seattle",
+
+    # San Jose
+    "Menlo Park, CA": "San Jose",
+
+    # Atlanta
+    "Kennesaw, GA": "Atlanta",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -683,12 +875,47 @@ def build_panel(file_list):
 # STEP 4: MACRO-MARKET MAPPING
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _resolve_macro_market(market_value):
+    """
+    Resolve a market string to its macro-market using a multi-step fallback:
+      1. Direct lookup in MACRO_MAP
+      2. Direct lookup in _CITY_ST_MAP (handles "City, ST" format)
+      3. Strip ", XX" state suffix and retry MACRO_MAP  (e.g. "Addison, TX" → "Addison")
+      4. Strip ", XX" and retry with "City ST" format   (e.g. "Addison TX")
+      5. Return "Other"
+    """
+    if not isinstance(market_value, str) or not market_value.strip():
+        return "Other"
+
+    val = market_value.strip()
+
+    # 1. Direct lookup
+    if val in MACRO_MAP:
+        return MACRO_MAP[val]
+
+    # 2. "City, ST" secondary map
+    if val in _CITY_ST_MAP:
+        return _CITY_ST_MAP[val]
+
+    # 3-4. Try stripping state suffix  ("City, ST" → "City" and "City ST")
+    m = re.match(r'^(.+),\s*([A-Z]{2})$', val)
+    if m:
+        city, state = m.group(1).strip(), m.group(2)
+        city_st = f"{city} {state}"
+        if city_st in MACRO_MAP:
+            return MACRO_MAP[city_st]
+        if city in MACRO_MAP:
+            return MACRO_MAP[city]
+
+    return "Other"
+
+
 def apply_macro_map(df):
     if "market" not in df.columns:
         df["macro_market"] = "Other"
         return df
 
-    df["macro_market"] = df["market"].map(MACRO_MAP).fillna("Other")
+    df["macro_market"] = df["market"].apply(_resolve_macro_market)
 
     # Report unmapped markets
     other_mask = df["macro_market"] == "Other"
