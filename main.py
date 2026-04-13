@@ -88,6 +88,7 @@ def run(reit: str | None, limit: int | None, save: bool) -> pd.DataFrame:
     targets = [reit.upper()] if reit else list(scrapers.keys())
 
     all_frames = []
+    failed = []
     for ticker in targets:
         if ticker not in scrapers:
             logger.warning(f"No scraper available for {ticker} — skipping.")
@@ -98,14 +99,37 @@ def run(reit: str | None, limit: int | None, save: bool) -> pd.DataFrame:
         logger.info(f"{'='*60}")
 
         scrape_fn = scrapers[ticker]
-        df = scrape_fn(limit=limit)
+
+        # ── Isolated execution with retry ──────────────────────────
+        # Each scraper runs inside try/except so one failure never
+        # kills the remaining REITs.  Retries once on transient errors
+        # (network timeouts, browser crashes, etc.).
+        df = pd.DataFrame()
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                df = scrape_fn(limit=limit)
+                break  # success
+            except Exception as e:
+                logger.error(f"{ticker} attempt {attempt}/{max_attempts} failed: "
+                             f"{type(e).__name__}: {e}")
+                if attempt < max_attempts:
+                    logger.info(f"  Retrying {ticker}...")
+                else:
+                    logger.error(f"  {ticker} FAILED after {max_attempts} attempts — skipping.")
+                    failed.append(ticker)
 
         if df.empty:
-            logger.warning(f"{ticker}: 0 rows returned — skipping tracker/save.")
+            if ticker not in failed:
+                logger.warning(f"{ticker}: 0 rows returned — skipping tracker/save.")
             continue
 
         # Run longitudinal tracker — updates first_seen / last_seen
-        df = run_tracker(df, data_dir=DATA_DIR, scrape_date=date.today())
+        try:
+            df = run_tracker(df, data_dir=DATA_DIR, scrape_date=date.today())
+        except Exception as e:
+            logger.error(f"{ticker} tracker failed: {type(e).__name__}: {e}")
+            logger.info(f"  Saving raw data without tracker merge.")
 
         logger.info(f"{ticker}: {len(df):,} rows after tracker merge.")
 
@@ -117,17 +141,24 @@ def run(reit: str | None, limit: int | None, save: bool) -> pd.DataFrame:
 
         all_frames.append(df)
 
+    if failed:
+        logger.warning(f"\n{'!'*60}")
+        logger.warning(f"  FAILED REITs: {', '.join(failed)}")
+        logger.warning(f"{'!'*60}")
+
     if not all_frames:
         logger.error("No data collected.")
         return pd.DataFrame()
 
     combined = pd.concat(all_frames, ignore_index=True)
     logger.info(f"\nTotal rows across all REITs: {len(combined):,}")
+    logger.info(f"Successful: {len(all_frames)} REITs | Failed: {len(failed)}")
 
     if save:
         registry_df = load_registry(DATA_DIR)
         write_excel(combined, registry_df, CUMULATIVE_EXCEL)
 
+    # Exit code 0 if we got at least some data, 1 only if total failure
     return combined
 
 

@@ -4,7 +4,8 @@
 # Also safe to run manually anytime: py weekly_run.py
 #
 # Pipeline:
-#   1. Run all scrapers (MAA, CPT, EQR, AVB, UDR, ESS, INVH)
+#   0. Pre-flight: ensure Playwright browsers are installed
+#   1. Run all scrapers (MAA, CPT, EQR, AVB, UDR, ESS, INVH, AMH)
 #   2. Split any CSV > 4,000 rows or > 1.5 MB into _part1 / _part2
 #   3. Git add + commit + push to GitHub
 #   4. Rebuild Excel workbook via build_excel.py (pulls from GitHub)
@@ -44,6 +45,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def preflight_checks():
+    """Step 0: Ensure dependencies are ready (Playwright browsers, etc.)."""
+    logger.info("=" * 60)
+    logger.info("  STEP 0: Pre-flight checks")
+    logger.info("=" * 60)
+
+    # Ensure Playwright chromium is installed — this is a no-op if already
+    # up to date, and auto-fixes after pip upgrades playwright.
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0:
+            logger.info("  Playwright chromium: OK")
+        else:
+            logger.warning(f"  Playwright install returned {result.returncode}: "
+                           f"{result.stderr.strip()[:200]}")
+    except Exception as e:
+        logger.warning(f"  Playwright pre-flight failed: {e}")
+
+    # Verify data directories exist
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    logger.info("  Directories: OK")
+
+
 def run_scrapers():
     """Step 1: Run main.py to scrape all REITs."""
     logger.info("=" * 60)
@@ -68,7 +99,14 @@ def split_large_csvs():
     logger.info("  STEP 2: Splitting large CSVs")
     logger.info("=" * 60)
 
-    for csv_path in sorted(RAW_DIR.glob(f"*_raw_{today}.csv")):
+    # Use glob for today AND tomorrow (scrape starts ~11PM, may cross midnight)
+    from datetime import timedelta
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    candidates = sorted(set(
+        list(RAW_DIR.glob(f"*_raw_{today}.csv")) +
+        list(RAW_DIR.glob(f"*_raw_{tomorrow}.csv"))
+    ))
+    for csv_path in candidates:
         # Skip already-split files
         if "_part1" in csv_path.name or "_part2" in csv_path.name:
             continue
@@ -161,6 +199,9 @@ def main():
     logger.info(f"Weekly REIT pipeline started — {today}")
     logger.info(f"Base directory: {BASE_DIR}")
     logger.info("")
+
+    # Step 0: Pre-flight
+    preflight_checks()
 
     # Step 1: Scrape
     rc = run_scrapers()
